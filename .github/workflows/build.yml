@@ -55,8 +55,8 @@ jobs:
                   applicationId "com.example.usbtether"
                   minSdk 24
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -78,18 +78,19 @@ jobs:
           EOF
 
           cat << 'EOF' > src/main/res/xml/accessibility_service_config.xml
-          <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
               android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:accessibilityFlags="flagDefault"
               android:canRetrieveWindowContent="true"
-              android:notificationTimeout="100" />
+              android:notificationTimeout="50" />
           EOF
 
           cat << 'EOF' > src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
               <application
                   android:label="USB Tether Toggle"
                   android:icon="@drawable/ic_usb">
@@ -124,38 +125,101 @@ jobs:
 
           import android.app.PendingIntent;
           import android.content.ComponentName;
+          import android.content.Context;
           import android.content.Intent;
           import android.os.Build;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
           import android.service.quicksettings.Tile;
           import android.service.quicksettings.TileService;
+          import android.widget.Toast;
+          import java.net.NetworkInterface;
+          import java.util.Enumeration;
 
           public class UsbTileService extends TileService {
+              private final Handler handler = new Handler(Looper.getMainLooper());
+
+              public static boolean isUsbTetheringActive() {
+                  try {
+                      Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+                      if (interfaces == null) return false;
+                      while (interfaces.hasMoreElements()) {
+                          NetworkInterface intf = interfaces.nextElement();
+                          String name = intf.getName().toLowerCase();
+                          if ((name.contains("rndis") || name.contains("usb") || name.contains("ncm")) && intf.isUp()) {
+                              return true;
+                          }
+                      }
+                  } catch (Exception ignored) {}
+                  return false;
+              }
+
+              public static boolean isAccessibilityEnabled(Context context) {
+                  String enabled = Settings.Secure.getString(
+                          context.getContentResolver(),
+                          Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                  );
+                  if (enabled == null) return false;
+                  return enabled.contains(context.getPackageName() + "/" + TetherAutoClickService.class.getName())
+                          || enabled.contains(context.getPackageName() + "/.TetherAutoClickService");
+              }
+
+              public void syncTileState() {
+                  Tile tile = getQsTile();
+                  if (tile != null) {
+                      boolean active = isUsbTetheringActive();
+                      tile.setState(active ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
+                      tile.updateTile();
+                  }
+              }
+
+              @Override
+              public void onStartListening() {
+                  super.onStartListening();
+                  syncTileState();
+                  handler.postDelayed(this::syncTileState, 500);
+                  handler.postDelayed(this::syncTileState, 1500);
+              }
+
               @Override
               @SuppressWarnings("deprecation")
               public void onClick() {
                   super.onClick();
-                  TetherAutoClickService.shouldClickUsbTether = true;
+
+                  if (!isAccessibilityEnabled(this)) {
+                      syncTileState();
+                      Toast.makeText(this, "Downloaded apps में जाकर USB Tether Auto Click ऑन करें", Toast.LENGTH_LONG).show();
+                      Intent accIntent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                      accIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      launchIntent(accIntent);
+                      return;
+                  }
+
+                  TetherAutoClickService.triggerAutoClick();
 
                   Intent intent = new Intent();
                   intent.setComponent(new ComponentName(
                           "com.android.settings",
                           "com.android.settings.TetherSettings"
                   ));
-                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                  launchIntent(intent);
 
+                  handler.postDelayed(this::syncTileState, 800);
+                  handler.postDelayed(this::syncTileState, 1600);
+                  handler.postDelayed(this::syncTileState, 2500);
+              }
+
+              @SuppressWarnings("deprecation")
+              private void launchIntent(Intent intent) {
                   if (Build.VERSION.SDK_INT >= 34) {
                       PendingIntent pendingIntent = PendingIntent.getActivity(
-                              this, 0, intent, PendingIntent.FLAG_IMMUTABLE
+                              this, 0, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
                       );
                       startActivityAndCollapse(pendingIntent);
                   } else {
                       startActivityAndCollapse(intent);
-                  }
-
-                  Tile tile = getQsTile();
-                  if (tile != null) {
-                      tile.setState(tile.getState() == Tile.STATE_ACTIVE ? Tile.STATE_INACTIVE : Tile.STATE_ACTIVE);
-                      tile.updateTile();
                   }
               }
           }
@@ -165,35 +229,78 @@ jobs:
           package com.example.usbtether;
 
           import android.accessibilityservice.AccessibilityService;
+          import android.content.ComponentName;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.service.quicksettings.TileService;
           import android.view.accessibility.AccessibilityEvent;
           import android.view.accessibility.AccessibilityNodeInfo;
+          import android.widget.Toast;
           import java.util.List;
 
           public class TetherAutoClickService extends AccessibilityService {
-              public static boolean shouldClickUsbTether = false;
+              private static boolean shouldClickUsbTether = false;
+              private static long requestTime = 0;
+              private final Handler handler = new Handler(Looper.getMainLooper());
+
+              public static void triggerAutoClick() {
+                  shouldClickUsbTether = true;
+                  requestTime = System.currentTimeMillis();
+              }
 
               @Override
               public void onAccessibilityEvent(AccessibilityEvent event) {
                   if (!shouldClickUsbTether) return;
+                  attemptClick();
+              }
+
+              private void attemptClick() {
+                  if (!shouldClickUsbTether) return;
+                  if (System.currentTimeMillis() - requestTime > 4000) {
+                      shouldClickUsbTether = false;
+                      return;
+                  }
 
                   AccessibilityNodeInfo rootNode = getRootInActiveWindow();
-                  if (rootNode == null) return;
+                  if (rootNode == null) {
+                      handler.postDelayed(this::attemptClick, 150);
+                      return;
+                  }
 
                   List<AccessibilityNodeInfo> nodes = rootNode.findAccessibilityNodeInfosByText("USB tethering");
-                  if (nodes != null) {
+                  if (nodes != null && !nodes.isEmpty()) {
                       for (AccessibilityNodeInfo node : nodes) {
                           AccessibilityNodeInfo parent = node;
                           while (parent != null && !parent.isClickable()) {
                               parent = parent.getParent();
                           }
                           if (parent != null) {
-                              parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                               shouldClickUsbTether = false;
-                              performGlobalAction(GLOBAL_ACTION_BACK);
-                              break;
+                              if (parent.isEnabled()) {
+                                  parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                              } else {
+                                  Toast.makeText(this, "USB केबल कनेक्ट नहीं है", Toast.LENGTH_SHORT).show();
+                              }
+                              handler.postDelayed(() -> {
+                                  performGlobalAction(GLOBAL_ACTION_BACK);
+                                  requestTileSync();
+                              }, 250);
+                              handler.postDelayed(this::requestTileSync, 900);
+                              return;
                           }
                       }
                   }
+
+                  handler.postDelayed(this::attemptClick, 150);
+              }
+
+              private void requestTileSync() {
+                  try {
+                      TileService.requestListeningState(
+                              this,
+                              new ComponentName(this, UsbTileService.class)
+                      );
+                  } catch (Exception ignored) {}
               }
 
               @Override

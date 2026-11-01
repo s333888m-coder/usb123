@@ -55,8 +55,8 @@ jobs:
                   applicationId "com.example.usbtether"
                   minSdk 24
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "3.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -77,6 +77,27 @@ jobs:
           </vector>
           EOF
 
+          cat << 'EOF' > src/main/res/drawable/ic_launcher.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#2962FF"
+                  android:pathData="M12,12m-11,0a11,11 0,1 1,22 0a11,11 0,1 1,-22 0"/>
+              <group
+                  android:scaleX="0.65"
+                  android:scaleY="0.65"
+                  android:pivotX="12"
+                  android:pivotY="12">
+                  <path
+                      android:fillColor="#FFFFFF"
+                      android:pathData="M15,7v4h1v2h-3V5h2l-3,-4 -3,4h2v8H8v-2.07c0.7,-0.37 1.2,-1.08 1.2,-1.93 0,-1.21 -0.99,-2.2 -2.2,-2.2 -1.21,0 -2.2,0.99 -2.2,2.2 0,0.85 0.5,1.56 1.2,1.93V13c0,1.11 0.89,2 2,2h3v3.05c-0.71,0.37 -1.2,1.1 -1.2,1.95 0,1.22 0.99,2.2 2.2,2.2 1.21,0 2.2,-0.98 2.2,-2.2 0,-0.85 -0.49,-1.58 -1.2,-1.95V15h3c1.11,0 2,-0.89 2,-2v-2h1V7h-4z"/>
+              </group>
+          </vector>
+          EOF
+
           cat << 'EOF' > src/main/res/xml/accessibility_service_config.xml
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
               android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
@@ -92,8 +113,20 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
               <application
-                  android:label="USB Tether Toggle"
-                  android:icon="@drawable/ic_usb">
+                  android:label="USB Tether"
+                  android:icon="@drawable/ic_launcher"
+                  android:roundIcon="@drawable/ic_launcher"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
                   <service
                       android:name=".UsbTileService"
                       android:label="USB Tethering"
@@ -104,6 +137,7 @@ jobs:
                           <action android:name="android.service.quicksettings.action.QS_TILE" />
                       </intent-filter>
                   </service>
+
                   <service
                       android:name=".TetherAutoClickService"
                       android:label="USB Tether Auto Click"
@@ -118,6 +152,143 @@ jobs:
                   </service>
               </application>
           </manifest>
+          EOF
+
+          cat << 'EOF' > src/main/java/com/example/usbtether/MainActivity.java
+          package com.example.usbtether;
+
+          import android.app.Activity;
+          import android.content.ComponentName;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+              private TextView statusText;
+              private TextView accessText;
+              private Button toggleBtn;
+              private final Handler handler = new Handler(Looper.getMainLooper());
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setGravity(Gravity.CENTER);
+                  layout.setBackgroundColor(Color.parseColor("#131722"));
+                  int pad = (int) (24 * getResources().getDisplayMetrics().density);
+                  layout.setPadding(pad, pad, pad, pad);
+
+                  TextView title = new TextView(this);
+                  title.setText("USB Tethering Control");
+                  title.setTextColor(Color.WHITE);
+                  title.setTextSize(22);
+                  title.setGravity(Gravity.CENTER);
+                  layout.addView(title);
+
+                  statusText = new TextView(this);
+                  statusText.setTextSize(16);
+                  statusText.setGravity(Gravity.CENTER);
+                  statusText.setPadding(0, pad / 2, 0, pad);
+                  layout.addView(statusText);
+
+                  toggleBtn = new Button(this);
+                  toggleBtn.setTextColor(Color.WHITE);
+                  toggleBtn.setTextSize(16);
+                  int btnSize = (int) (150 * getResources().getDisplayMetrics().density);
+                  LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(btnSize, btnSize);
+                  btnParams.bottomMargin = pad;
+                  toggleBtn.setLayoutParams(btnParams);
+                  toggleBtn.setOnClickListener(v -> handleToggle());
+                  layout.addView(toggleBtn);
+
+                  accessText = new TextView(this);
+                  accessText.setTextSize(14);
+                  accessText.setGravity(Gravity.CENTER);
+                  accessText.setPadding(0, 0, 0, pad / 2);
+                  layout.addView(accessText);
+
+                  Button accBtn = new Button(this);
+                  accBtn.setText("Accessibility सेटिंग खोलें");
+                  accBtn.setTextColor(Color.WHITE);
+                  GradientDrawable accBg = new GradientDrawable();
+                  accBg.setColor(Color.parseColor("#1E222D"));
+                  accBg.setCornerRadius(24f);
+                  accBg.setStroke(2, Color.parseColor("#363C4E"));
+                  accBtn.setBackground(accBg);
+                  accBtn.setPadding(pad, pad / 2, pad, pad / 2);
+                  accBtn.setOnClickListener(v -> {
+                      Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                      startActivity(intent);
+                  });
+                  layout.addView(accBtn);
+
+                  setContentView(layout);
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  updateUI();
+                  handler.postDelayed(this::updateUI, 800);
+              }
+
+              private void updateUI() {
+                  boolean active = UsbTileService.isUsbTetheringActive();
+                  boolean accEnabled = UsbTileService.isAccessibilityEnabled(this);
+
+                  statusText.setText(active ? "Status: ON (चालू है)" : "Status: OFF (बंद है)");
+                  statusText.setTextColor(active ? Color.parseColor("#00E676") : Color.parseColor("#9BA3B0"));
+
+                  GradientDrawable circle = new GradientDrawable();
+                  circle.setShape(GradientDrawable.OVAL);
+                  if (active) {
+                      circle.setColor(Color.parseColor("#2962FF"));
+                      circle.setStroke(6, Color.parseColor("#82B1FF"));
+                      toggleBtn.setText("USB Tether\nON");
+                  } else {
+                      circle.setColor(Color.parseColor("#1E222D"));
+                      circle.setStroke(6, Color.parseColor("#363C4E"));
+                      toggleBtn.setText("USB Tether\nOFF");
+                  }
+                  toggleBtn.setBackground(circle);
+
+                  if (accEnabled) {
+                      accessText.setText("Auto-Click Permission: Active");
+                      accessText.setTextColor(Color.parseColor("#00E676"));
+                  } else {
+                      accessText.setText("Auto-Click Permission: OFF (इसे ऑन करें)");
+                      accessText.setTextColor(Color.parseColor("#FF5252"));
+                  }
+              }
+
+              private void handleToggle() {
+                  if (!UsbTileService.isAccessibilityEnabled(this)) {
+                      Toast.makeText(this, "पहले Downloaded apps में जाकर USB Tether Auto Click ऑन करें", Toast.LENGTH_LONG).show();
+                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                      return;
+                  }
+                  TetherAutoClickService.triggerAutoClick();
+                  Intent intent = new Intent();
+                  intent.setComponent(new ComponentName(
+                          "com.android.settings",
+                          "com.android.settings.TetherSettings"
+                  ));
+                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                  startActivity(intent);
+              }
+          }
           EOF
 
           cat << 'EOF' > src/main/java/com/example/usbtether/UsbTileService.java
